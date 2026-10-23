@@ -91,16 +91,20 @@ def sun_elev(t, lat, lon):
     return np.degrees(np.arcsin(np.sin(la) * np.sin(dec) + np.cos(la) * np.cos(dec) * np.cos(ha)))
 
 def sun_minutes(F, t_mid, t_end, lat, lon):
-    """F = gemiddelde directe straling op een horizontaal vlak in het uur (W/m²) → minuten zon, 200 = nacht."""
-    h = sun_elev(t_mid, lat, lon)
-    s = np.sin(np.radians(np.clip(h, 0.5, 90)))
-    dni = F / s                                                # straling loodrecht op de zon
-    am = 1 / s
-    dni_cs = 1361 * 0.7 ** (am ** 0.678)                       # heldere hemel (Meinel)
-    frac = np.clip(dni / (0.8 * dni_cs), 0, 1)
-    frac = np.where(dni_cs < 120, np.clip(dni / 120, 0, 1) * frac, frac)   # lage zon: WMO-drempel 120 W/m²
-    m = np.rint(frac * 60)
-    night = (h < -0.5) & (sun_elev(t_end, lat, lon) < 0) & (sun_elev(t_mid - dt.timedelta(minutes=30), lat, lon) < 0)
+    """F = gemiddelde directe straling op een horizontaal vlak in het uur (W/m²) → minuten zon, 200 = nacht.
+    Over het uur 6 momenten: de gemiddelde sin(zonnehoogte) zet F om naar straling loodrecht op de zon,
+    en het deel van het uur dat de zon echt op is telt mee (geen overschatting bij zonsopkomst/-ondergang)."""
+    hs = [sun_elev(t_end - dt.timedelta(minutes=55 - 10 * k), lat, lon) for k in range(6)]
+    sins = [np.sin(np.radians(np.clip(h, 0, 90))) for h in hs]
+    sbar = sum(sins) / 6
+    up = sum((h > 1).astype(np.float32) for h in hs) / 6           # deel van het uur met zon boven 1°
+    cs = sum(np.where(h > 1, 1361 * 0.7 ** ((1 / np.maximum(si, 0.017)) ** 0.678), 0) for h, si in zip(hs, sins))
+    cs = cs / np.maximum(up * 6, 1)                                  # gemiddelde heldere-hemelstraling als de zon op is
+    dni = np.where(sbar > 0.005, F / np.maximum(sbar, 0.005), 0)     # straling loodrecht op de zon
+    frac = np.clip(dni / np.maximum(0.8 * cs, 1), 0, 1)
+    frac = frac * np.clip(dni / 120, 0, 1)                           # WMO: zon telt pas vanaf 120 W/m²
+    m = np.rint(frac * up * 60)
+    night = np.all([h < 0 for h in hs], axis=0) & (sun_elev(t_end, lat, lon) < 0)
     out = np.where(night, 200, m)
     return np.where(np.isnan(F), 255, out).astype(np.uint8)
 
