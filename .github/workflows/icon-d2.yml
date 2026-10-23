@@ -1,0 +1,39 @@
+name: ICON-D2 kaartdata
+
+on:
+  schedule:
+    # ICON-D2 draait elke 3 uur; de run is ~2 uur later compleet
+    - cron: "40 2,5,8,11,14,17,20,23 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: icon-d2
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Pakketten
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libeccodes0 libeccodes-data
+          pip install --quiet numpy pillow eccodes
+      - name: Data ophalen en omzetten
+        run: python scripts/icon_d2.py out
+      - name: Publiceren op GitHub Pages (branch gh-pages)
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./out
+          publish_branch: gh-pages
+          force_orphan: true      # alleen de nieuwste run bewaren, repo blijft klein
+          enable_jekyll: false
