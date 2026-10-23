@@ -1,29 +1,29 @@
 #!/usr/bin/env python3
 """
-Haalt de nieuwste ICON-D2-run van de DWD (open data) op en zet windstoten + wind om
+Haalt de nieuwste ICON-EU-run van de DWD (open data) op en zet windstoten + wind om
 naar kleine PNG-bestanden per uur, voor de kaart in Weather Swipe.
 
-Per uur één PNG (RGB) op ~0,04° (≈ 4 km):
+Per uur één PNG (RGB) op het volle ICON-EU-raster, 0,0625° (≈ 7 km):
   R = windstoot in km/u (0–254), 255 = geen data
   G = u-wind (m/s) * 4 + 128      (west → oost)
   B = v-wind (m/s) * 4 + 128      (zuid → noord)
 Plus out/latest.json met run, tijden, gebied en schaal.
 
-Bron: Deutscher Wetterdienst, ICON-D2 (https://opendata.dwd.de), CC BY 4.0.
+Bron: Deutscher Wetterdienst, ICON-EU (https://opendata.dwd.de), CC BY 4.0.
 """
 import bz2, datetime as dt, io, json, os, sys, time, urllib.request
 import numpy as np
 from PIL import Image
 import eccodes
 
-BASE = "https://opendata.dwd.de/weather/nwp/icon-d2/grib"
+BASE = "https://opendata.dwd.de/weather/nwp/icon-eu/grib"
 OUT = sys.argv[1] if len(sys.argv) > 1 else "out"
 STEPS = range(0, 49)        # 0 t/m +48 uur
-DOWN = 2                    # 0,02° → 0,04°
+DOWN = 1                    # volle resolutie (0,0625°)
 
 def url(run, var, step):
     hh = run.strftime("%H"); stamp = run.strftime("%Y%m%d%H")
-    return f"{BASE}/{hh}/{var}/icon-d2_germany_regular-lat-lon_single-level_{stamp}_{step:03d}_2d_{var}.grib2.bz2"
+    return f"{BASE}/{hh}/{var}/icon-eu_europe_regular-lat-lon_single-level_{stamp}_{step:03d}_{var.upper()}.grib2.bz2"
 
 def fetch(u, tries=3):
     for k in range(tries):
@@ -64,10 +64,10 @@ def latest_run():
     now = dt.datetime.now(dt.timezone.utc).replace(minute=0, second=0, microsecond=0)
     for back in range(0, 30):
         run = now - dt.timedelta(hours=back)
-        if run.hour % 3: continue
-        # run is pas compleet als de laatste stap er is
-        if fetch_head(url(run, "vmax_10m", 45)): return run
-    raise SystemExit("geen complete ICON-D2-run gevonden")
+        if run.hour % 6: continue          # 00/06/12/18 UTC lopen tot +120 uur
+        # run is pas compleet (voor onze 48 uur) als stap 48 er is
+        if fetch_head(url(run, "vmax_10m", 48)): return run
+    raise SystemExit("geen complete ICON-EU-run gevonden")
 
 def fetch_head(u):
     try:
@@ -99,10 +99,10 @@ def main():
                     "dlat": round(DOWN * dlat0, 6), "dlon": round(DOWN * dlon0, 6), "ni": int(r.shape[1]), "nj": int(r.shape[0]) }
         print("stap", step, "ok")
     if not times: raise SystemExit("geen data")
-    meta = { "model": "ICON-D2", "source": "Deutscher Wetterdienst (CC BY 4.0)", "run": int(run.timestamp()),
+    meta = { "model": "ICON-EU", "source": "Deutscher Wetterdienst (CC BY 4.0)", "run": int(run.timestamp()),
              "grid": box, "scale": { "gust": "R = km/u, 255 = geen data", "uv": "(G|B - 128) / 4 = m/s" }, "times": times }
     with open(os.path.join(OUT, "latest.json"), "w") as f: json.dump(meta, f)
-    with open(os.path.join(OUT, "index.html"), "w") as f: f.write("<p>Weather Swipe kaartdata (ICON-D2, DWD)</p>")
+    with open(os.path.join(OUT, "index.html"), "w") as f: f.write("<p>Weather Swipe kaartdata (ICON-EU, DWD)</p>")
     print("klaar", len(times), "uren")
 
 if __name__ == "__main__":
