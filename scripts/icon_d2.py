@@ -13,6 +13,9 @@ Plus per uur een zon-PNG (RGB, sNN.png):
   G: totale bewolking in % (0–100) op dat tijdstip, 255 = geen data (voor opklaringen in de nacht)
   Afgeleid uit ASWDIR_S (directe straling, gemiddelde sinds modelstart): per uur
   terugrekenen, omzetten naar straling loodrecht op de zon en vergelijken met heldere hemel.
+Plus per uur een neerslag-PNG (RGB, pNN.png), voor het uur dat eindigt op dat tijdstip:
+  R: neerslag in 0,1 mm (0–254 = 0–25,4 mm), 255 = geen data
+  G: aandeel sneeuw in % (0–100)
 Plus out/latest.json met run, tijden, gebied en schaal.
 
 Bron: Deutscher Wetterdienst, ICON-EU (https://opendata.dwd.de), CC BY 4.0.
@@ -115,6 +118,7 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     times, box = [], None
     prev_a, has_sun, LAT, LON = None, False, None, None
+    prev_p, prev_s, has_rain = None, None, False
     for step in STEPS:
         g = fetch(url(run, "vmax_10m", step)); u = fetch(url(run, "u_10m", step)); v = fetch(url(run, "v_10m", step))
         if not (g and u and v): print("stap ontbreekt", step); continue
@@ -148,11 +152,30 @@ def main():
             Image.fromarray(np.dstack([sm, cl, np.zeros_like(sm)]), "RGB").save(os.path.join(OUT, f"s{step:02d}.png"), optimize=True)
             times[-1]["sun"] = 1; has_sun = True
         prev_a = A
+        # neerslag: TOT_PREC en sneeuw (SNOW_GSP + SNOW_CON) zijn opgeteld sinds de start → per uur het verschil
+        def arr(var):
+            b = fetch(url(run, var, step))
+            return down(decode(b)[0]) if b else None
+        P = arr("tot_prec")
+        sg, sc = arr("snow_gsp"), arr("snow_con")
+        S = None if sg is None else (sg + (sc if sc is not None and sc.shape == sg.shape else 0))
+        if P is not None and prev_p is not None and P.shape == r.shape:
+            pr = np.maximum(0, P - prev_p)
+            sn = np.maximum(0, S - prev_s) if S is not None and prev_s is not None and S.shape == pr.shape else np.zeros_like(pr)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                frac = np.where(pr > 0.05, np.clip(sn / np.maximum(pr, 1e-6), 0, 1), 0)
+            R = np.where(np.isnan(pr), 255, np.clip(np.rint(pr * 10), 0, 254)).astype(np.uint8)
+            Gs = np.where(np.isnan(frac), 0, np.rint(frac * 100)).astype(np.uint8)
+            Image.fromarray(np.dstack([R, Gs, np.zeros_like(R)]), "RGB").save(os.path.join(OUT, f"p{step:02d}.png"), optimize=True)
+            times[-1]["rain"] = 1; has_rain = True
+        prev_p, prev_s = P, S
         print("stap", step, "ok")
     if not times: raise SystemExit("geen data")
     meta = { "model": "ICON-EU", "source": "Deutscher Wetterdienst (CC BY 4.0)", "run": int(run.timestamp()),
              "grid": box, "scale": { "gust": "R = km/u, 255 = geen data", "uv": "(G|B - 128) / 4 = m/s",
-             "sun": "sNN.png R: 0-60 = minuten zon, 200 = nacht, 255 = geen data; G: bewolking %, 255 = geen data" }, "sun": has_sun, "times": times }
+             "sun": "sNN.png R: 0-60 = minuten zon, 200 = nacht, 255 = geen data; G: bewolking %, 255 = geen data",
+             "rain": "pNN.png R: 0,1 mm per uur (255 = geen data); G: % sneeuw" },
+             "sun": has_sun, "has_rain": has_rain, "times": times }
     with open(os.path.join(OUT, "latest.json"), "w") as f: json.dump(meta, f)
     with open(os.path.join(OUT, "index.html"), "w") as f: f.write("<p>Weather Swipe kaartdata (ICON-EU, DWD)</p>")
     print("klaar", len(times), "uren")
