@@ -7,9 +7,10 @@ Per uur één PNG (RGB) op het volle ICON-EU-raster, 0,0625° (≈ 7 km):
   R = windstoot in km/u (0–254), 255 = geen data
   G = u-wind (m/s) * 4 + 128      (west → oost)
   B = v-wind (m/s) * 4 + 128      (zuid → noord)
-Plus per uur een zon-PNG (grijs, sNN.png):
-  0–60 = zonneschijn in minuten in het uur dat eindigt op dat tijdstip
-  200  = nacht (zon onder de horizon), 255 = geen data
+Plus per uur een zon-PNG (RGB, sNN.png):
+  R: 0–60 = zonneschijn in minuten in het uur dat eindigt op dat tijdstip
+     200  = nacht (zon onder de horizon), 255 = geen data
+  G: totale bewolking in % (0–100) op dat tijdstip, 255 = geen data (voor opklaringen in de nacht)
   Afgeleid uit ASWDIR_S (directe straling, gemiddelde sinds modelstart): per uur
   terugrekenen, omzetten naar straling loodrecht op de zon en vergelijken met heldere hemel.
 Plus out/latest.json met run, tijden, gebied en schaal.
@@ -140,14 +141,18 @@ def main():
         if A is not None and prev_a is not None and A.shape == r.shape:
             F = np.maximum(0, step * A - (step - 1) * prev_a)
             sm = sun_minutes(F, t - dt.timedelta(minutes=30), t, LAT, LON)
-            Image.fromarray(sm, "L").save(os.path.join(OUT, f"s{step:02d}.png"), optimize=True)
+            c = fetch(url(run, "clct", step))
+            C = down(decode(c)[0]) if c else None
+            cl = np.full(sm.shape, 255, np.uint8) if C is None or C.shape != sm.shape else \
+                 np.where(np.isnan(C), 255, np.clip(np.rint(C), 0, 100)).astype(np.uint8)
+            Image.fromarray(np.dstack([sm, cl, np.zeros_like(sm)]), "RGB").save(os.path.join(OUT, f"s{step:02d}.png"), optimize=True)
             times[-1]["sun"] = 1; has_sun = True
         prev_a = A
         print("stap", step, "ok")
     if not times: raise SystemExit("geen data")
     meta = { "model": "ICON-EU", "source": "Deutscher Wetterdienst (CC BY 4.0)", "run": int(run.timestamp()),
              "grid": box, "scale": { "gust": "R = km/u, 255 = geen data", "uv": "(G|B - 128) / 4 = m/s",
-             "sun": "sNN.png: 0-60 = minuten zon, 200 = nacht, 255 = geen data" }, "sun": has_sun, "times": times }
+             "sun": "sNN.png R: 0-60 = minuten zon, 200 = nacht, 255 = geen data; G: bewolking %, 255 = geen data" }, "sun": has_sun, "times": times }
     with open(os.path.join(OUT, "latest.json"), "w") as f: json.dump(meta, f)
     with open(os.path.join(OUT, "index.html"), "w") as f: f.write("<p>Weather Swipe kaartdata (ICON-EU, DWD)</p>")
     print("klaar", len(times), "uren")
