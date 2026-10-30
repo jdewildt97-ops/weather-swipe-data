@@ -16,6 +16,9 @@ Plus per uur een zon-PNG (RGB, sNN.png):
 Plus per uur een neerslag-PNG (RGB, pNN.png), voor het uur dat eindigt op dat tijdstip:
   R: neerslag in 0,1 mm (0–254 = 0–25,4 mm), 255 = geen data
   G: aandeel sneeuw in % (0–100)
+Plus per uur een temperatuur-PNG (RGB, tNN.png):
+  R: temperatuur op 2 m: (°C + 50) * 2  (0–254 = −50 … +77 °C), 255 = geen data
+  G: aandeel land in % (0–100), uit FR_LAND (zee krijgt op de kaart geen temperatuur)
 Plus out/latest.json met run, tijden, gebied en schaal.
 
 Bron: Deutscher Wetterdienst, ICON-EU (https://opendata.dwd.de), CC BY 4.0.
@@ -119,6 +122,9 @@ def main():
     times, box = [], None
     prev_a, has_sun, LAT, LON = None, False, None, None
     prev_p, prev_s, has_rain = None, None, False
+    has_temp = False
+    lb = fetch(f"{BASE}/{run.strftime('%H')}/fr_land/icon-eu_europe_regular-lat-lon_time-invariant_{run.strftime('%Y%m%d%H')}_FR_LAND.grib2.bz2")
+    LAND = down(decode(lb)[0]) if lb else None
     for step in STEPS:
         g = fetch(url(run, "vmax_10m", step)); u = fetch(url(run, "u_10m", step)); v = fetch(url(run, "v_10m", step))
         if not (g and u and v): print("stap ontbreekt", step); continue
@@ -169,13 +175,23 @@ def main():
             Image.fromarray(np.dstack([R, Gs, np.zeros_like(R)]), "RGB").save(os.path.join(OUT, f"p{step:02d}.png"), optimize=True)
             times[-1]["rain"] = 1; has_rain = True
         prev_p, prev_s = P, S
+        # temperatuur op 2 m (Kelvin) + landmasker
+        Tm = arr("t_2m")
+        if Tm is not None and Tm.shape == r.shape:
+            tc = Tm - 273.15
+            Rt = np.where(np.isnan(tc), 255, np.clip(np.rint((tc + 50) * 2), 0, 254)).astype(np.uint8)
+            Gl = np.full(Rt.shape, 100, np.uint8) if LAND is None or LAND.shape != Rt.shape else \
+                 np.where(np.isnan(LAND), 0, np.clip(np.rint(LAND * 100), 0, 100)).astype(np.uint8)
+            Image.fromarray(np.dstack([Rt, Gl, np.zeros_like(Rt)]), "RGB").save(os.path.join(OUT, f"t{step:02d}.png"), optimize=True)
+            times[-1]["temp"] = 1; has_temp = True
         print("stap", step, "ok")
     if not times: raise SystemExit("geen data")
     meta = { "model": "ICON-EU", "source": "Deutscher Wetterdienst (CC BY 4.0)", "run": int(run.timestamp()),
              "grid": box, "scale": { "gust": "R = km/u, 255 = geen data", "uv": "(G|B - 128) / 4 = m/s",
              "sun": "sNN.png R: 0-60 = minuten zon, 200 = nacht, 255 = geen data; G: bewolking %, 255 = geen data",
-             "rain": "pNN.png R: 0,1 mm per uur (255 = geen data); G: % sneeuw" },
-             "sun": has_sun, "has_rain": has_rain, "times": times }
+             "rain": "pNN.png R: 0,1 mm per uur (255 = geen data); G: % sneeuw",
+             "temp": "tNN.png R: (°C + 50) * 2 (255 = geen data); G: % land" },
+             "sun": has_sun, "has_rain": has_rain, "has_temp": has_temp, "times": times }
     with open(os.path.join(OUT, "latest.json"), "w") as f: json.dump(meta, f)
     with open(os.path.join(OUT, "index.html"), "w") as f: f.write("<p>Weather Swipe kaartdata (ICON-EU, DWD)</p>")
     print("klaar", len(times), "uren")
